@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # Copyright 2026  Qianyun, Inc., www.cloudchef.io, All rights reserved.
 
-"""Execute user-scoped no-parameter SmartCMP resource operations."""
+"""Execute user-scoped SmartCMP resource operations."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ ACTION_ALIASES = {
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments for executing a SmartCMP resource operation."""
     parser = argparse.ArgumentParser(
-        description="Execute SmartCMP no-parameter resource operations by resource ID."
+        description="Execute SmartCMP resource operations by resource ID."
     )
     parser.add_argument("resource_ids", nargs="+", help="One or more SmartCMP resource IDs or detail URLs.")
     parser.add_argument(
@@ -80,6 +80,22 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--action",
         required=True,
         help="SmartCMP operation ID to execute. start/stop aliases are still supported.",
+    )
+    parser.add_argument(
+        "--snapshot-name",
+        default="",
+        help="Required snapshot name when action=create_snapshot.",
+    )
+    parser.add_argument(
+        "--snapshot-description",
+        default="",
+        help="Optional snapshot description when action=create_snapshot.",
+    )
+    parser.add_argument(
+        "--snapshot-memory",
+        choices=("true", "false"),
+        default="false",
+        help="Whether to include VM memory when action=create_snapshot. Default: false.",
     )
     return parser.parse_args(argv)
 
@@ -134,9 +150,34 @@ def serialize_resource_ids(resource_ids: list[str]) -> str:
     return ",".join(resource_ids)
 
 
-def build_request_payload(resource_ids: list[str], action: str) -> dict[str, object]:
+def build_execute_parameters(
+    action: str,
+    *,
+    snapshot_name: str = "",
+    snapshot_description: str = "",
+    snapshot_memory: str = "false",
+) -> dict[str, object]:
     normalized_action = normalize_action(action)
+    if normalized_action != "create_snapshot":
+        return {}
+
+    normalized_snapshot_name = str(snapshot_name or "").strip()
+    if not normalized_snapshot_name:
+        raise ValueError("snapshot_name is required when action=create_snapshot.")
     return {
+        "snapshotName": normalized_snapshot_name,
+        "snapshotDesc": str(snapshot_description or "").strip(),
+        "snapshotMemory": "true" if str(snapshot_memory).strip().lower() == "true" else "false",
+    }
+
+
+def build_request_payload(
+    resource_ids: list[str],
+    action: str,
+    execute_parameters: dict[str, object] | None = None,
+) -> dict[str, object]:
+    normalized_action = normalize_action(action)
+    payload: dict[str, object] = {
         "operationId": normalized_action,
         "resourceIds": serialize_resource_ids(resource_ids),
         "scheduledTaskMetadataRequest": {
@@ -147,6 +188,9 @@ def build_request_payload(resource_ids: list[str], action: str) -> dict[str, obj
             "scheduledTime": None,
         },
     }
+    if execute_parameters:
+        payload["executeParameters"] = dict(execute_parameters)
+    return payload
 
 
 def find_operation(operations: list[dict[str, Any]], action: str) -> dict[str, Any] | None:
@@ -165,7 +209,7 @@ def validate_operation_for_targets(
     targets: list[dict[str, str]],
     action: str,
 ) -> None:
-    """Verify the current user can execute the no-parameter action on every target.
+    """Verify the current user can execute the action on every target.
 
     Raises:
         ValueError: If SmartCMP does not expose the action for this user/resource or
@@ -262,7 +306,13 @@ def main(argv: list[str] | None = None) -> int:
         action = normalize_action(args.action)
         targets = normalize_resource_targets(args.resource_ids, args.category)
         resource_ids = [target["resourceId"] for target in targets]
-        request_payload = build_request_payload(resource_ids, action)
+        execute_parameters = build_execute_parameters(
+            action,
+            snapshot_name=args.snapshot_name,
+            snapshot_description=args.snapshot_description,
+            snapshot_memory=args.snapshot_memory,
+        )
+        request_payload = build_request_payload(resource_ids, action, execute_parameters)
     except ValueError as exc:
         print(f"[ERROR] {exc}")
         return 1

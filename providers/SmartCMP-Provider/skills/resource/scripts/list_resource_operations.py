@@ -25,6 +25,7 @@ from _common import request_timeout, render_markdown_table, require_config  # no
 
 
 DEFAULT_RESOURCE_CATEGORY = "virtual-machines"
+SUPPORTED_PARAMETERIZED_OPERATION_IDS = {"create_snapshot"}
 RESOURCE_OPERATIONS_META_START = "##RESOURCE_OPERATIONS_META_START##"
 RESOURCE_OPERATIONS_META_END = "##RESOURCE_OPERATIONS_META_END##"
 
@@ -93,9 +94,12 @@ def parameters_are_empty(value: Any) -> bool:
     return False
 
 
-def operation_rejection_reason(operation: dict[str, Any]) -> str:
-    """Explain why an operation is outside this tool's executable no-parameter scope."""
-    if not normalize_operation_id(str(operation.get("id") or "")):
+def operation_rejection_reason(
+    operation: dict[str, Any],
+) -> str:
+    """Explain why an operation is outside this tool's executable scope."""
+    operation_id = normalize_operation_id(str(operation.get("id") or ""))
+    if not operation_id:
         return "Operation has no ID."
     if operation.get("enabled") is not True:
         return str(
@@ -107,13 +111,16 @@ def operation_rejection_reason(operation: dict[str, Any]) -> str:
         return "Operation must be executed in the SmartCMP web UI."
     if operation.get("inputsForm") not in (None, "", {}, []):
         return "Operation requires form input, which is not supported by this tool."
-    if not parameters_are_empty(operation.get("parameters")):
+    if (
+        operation_id not in SUPPORTED_PARAMETERIZED_OPERATION_IDS
+        and not parameters_are_empty(operation.get("parameters"))
+    ):
         return "Operation requires parameters, which is not supported by this tool."
     return ""
 
 
 def operation_is_executable(operation: dict[str, Any]) -> bool:
-    """Return whether the operation can be executed by this user-scoped no-parameter tool."""
+    """Return whether the operation can be executed without an unsupported web form."""
     return not operation_rejection_reason(operation)
 
 
@@ -200,7 +207,7 @@ def get_executable_operations(
     category: str,
     resource_id: str,
 ) -> list[dict[str, Any]]:
-    """Return operations executable by the current user and this no-parameter tool."""
+    """Return operations executable by the current user and this tool."""
     operations = fetch_resource_operations(base_url, headers, category, resource_id)
     return [operation for operation in operations if operation_is_executable(operation)]
 
@@ -214,7 +221,7 @@ def render_operation_list(
     """Render a concise human-readable operation list and stderr metadata block."""
     lines = [f"Executable operations for resource {resource_id} ({category}):"]
     if not operations:
-        lines.append("No executable no-parameter operations were returned for the current user.")
+        lines.append("No executable supported operations were returned for the current user.")
         return "\n".join(lines)
 
     rows = []

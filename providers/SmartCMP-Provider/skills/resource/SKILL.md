@@ -74,7 +74,7 @@ use_when:
   - User wants one comprehensive, read-only analysis covering resource alerts, monitoring health, compliance risk, and cost optimization
   - User wants to search resources or virtual machines by keyword through the CMP UI list endpoint
   - User wants to see which resource operations the current SmartCMP user can execute on a resource
-  - User wants to execute an enabled no-parameter operation on an existing SmartCMP cloud resource or virtual machine
+  - User wants to execute an enabled operation on an existing SmartCMP cloud resource or virtual machine
 
 avoid_when:
   - User wants only compliance, lifecycle, supportability, or security analysis without the other resource dimensions (use resource-compliance skill)
@@ -166,7 +166,7 @@ tool_detail_parameters: |
     "required": []
   }
 tool_operations_name: "smartcmp_list_resource_operations"
-tool_operations_description: "List enabled no-parameter SmartCMP resource operations executable by the current user through `GET /nodes/{category}/{resource_id}/resource-actions`. Accepts a SmartCMP detail URL such as `#/main/virtual-machines/<id>/details` or a raw resource UUID. Do not use resource type definition or built-in action endpoints as fallback. If the user only asked what operations are available, return the Markdown operation table. If the user asked to execute an operation, use this result as permission/operation validation evidence and continue to confirmation or clarification."
+tool_operations_description: "List enabled SmartCMP resource operations executable by the current user through `GET /nodes/{category}/{resource_id}/resource-actions`. Accepts a SmartCMP detail URL such as `#/main/virtual-machines/<id>/details` or a raw resource UUID. Do not use resource type definition or built-in action endpoints as fallback. If the user only asked what operations are available, return the Markdown operation table. If the user asked to execute an operation, use this result as permission/operation validation evidence and continue to confirmation or clarification."
 tool_operations_entrypoint: "scripts/list_resource_operations.py"
 tool_operations_groups:
   - cmp
@@ -194,7 +194,7 @@ tool_operations_parameters: |
     "required": ["resource_ref"]
   }
 tool_power_name: "smartcmp_operate_resource"
-tool_power_description: "Execute an enabled no-parameter SmartCMP resource operation through `POST /nodes/resource-operations`. RULES: (1) NEVER claim an operation was submitted without actually calling this tool — fabricating results is strictly forbidden. (2) Before calling, confirm the exact resource and operation with the user. (3) Always pass real SmartCMP resource UUIDs or detail URLs in resource_ids, not display names or list indexes. (4) The tool rechecks `GET /nodes/{category}/{id}/resource-actions` with the current user context before submission. (5) After success, keep the user response short; do not print raw request or response details."
+tool_power_description: "Execute an enabled SmartCMP resource operation through `POST /nodes/resource-operations`. RULES: (1) NEVER claim an operation was submitted without actually calling this tool — fabricating results is strictly forbidden. (2) Before calling, confirm the exact resource and operation with the user. (3) Always pass real SmartCMP resource UUIDs or detail URLs in resource_ids, not display names or list indexes. (4) The tool rechecks `GET /nodes/{category}/{id}/resource-actions` with the current user context before submission. (5) For create_snapshot, ask for a non-empty snapshot_name and pass it; optional snapshot_description and snapshot_memory are supported. (6) After success, keep the user response short; do not print raw request or response details."
 tool_power_entrypoint: "scripts/operate_resource.py"
 tool_power_groups:
   - cmp
@@ -207,6 +207,10 @@ tool_power_cli_positional:
   - resource_ids
 tool_power_cli_split:
   - resource_ids
+tool_power_cli_flag_overrides:
+  snapshot_name: "--snapshot-name"
+  snapshot_description: "--snapshot-description"
+  snapshot_memory: "--snapshot-memory"
 tool_power_parameters: |
   {
     "type": "object",
@@ -223,6 +227,20 @@ tool_power_parameters: |
       "action": {
         "type": "string",
         "description": "SmartCMP operation ID to execute. start/stop and 开机/关机 aliases are supported."
+      },
+      "snapshot_name": {
+        "type": "string",
+        "description": "Snapshot name. Required when action is create_snapshot; ask the user when it was not supplied."
+      },
+      "snapshot_description": {
+        "type": "string",
+        "description": "Optional snapshot description when action is create_snapshot."
+      },
+      "snapshot_memory": {
+        "type": "string",
+        "enum": ["true", "false"],
+        "default": "false",
+        "description": "Whether to include VM memory in the snapshot. Applies only to create_snapshot."
       }
     },
     "required": ["resource_ids", "action"]
@@ -397,7 +415,7 @@ tool_comprehensive_cost_parameters: |
 
 Browse SmartCMP resources, inspect cloud host details, coordinate comprehensive
 single-resource analysis, list current-user executable operations, and execute
-enabled no-parameter resource operations.
+enabled supported resource operations.
 
 ## Purpose
 
@@ -409,8 +427,8 @@ comprehensive analysis coordination, and day2 resource operations.
 - Call `PATCH /nodes/{id}/view` for one cloud host detail snapshot until the CMP view API bug is fixed
 - Present cloud-host detail in a compact CMP-style layout instead of dumping raw metadata
 - Coordinate existing domain tools for comprehensive single-resource analysis without duplicating their evidence collection or LLM verdict rules
-- Use `GET /nodes/{category}/{id}/resource-actions` to list enabled no-parameter operations executable by the current SmartCMP user
-- Use `POST /nodes/resource-operations` for immediate no-parameter resource operations
+- Use `GET /nodes/{category}/{id}/resource-actions` to list enabled operations executable by the current SmartCMP user and supported by this skill
+- Use `POST /nodes/resource-operations` for immediate supported resource operations
 
 ## Scope Rules
 
@@ -420,7 +438,7 @@ comprehensive analysis coordination, and day2 resource operations.
 - Keep single-dimension questions in their owning skills: Alarm for monitoring health, resource-compliance for generic compliance risk, and cost-optimization for resource cost analysis.
 - If the user provides an exact visible cloud-host name for detail, call `smartcmp_resource_detail` with `resource_name` directly. Do not call `smartcmp_list_all_resource` first just to resolve or display the name.
 - Use `smartcmp_list_resource_operations` when the user asks what operations the current user can execute on a resource.
-- Use `smartcmp_operate_resource` when the user wants to execute an enabled no-parameter operation on an existing cloud resource.
+- Use `smartcmp_operate_resource` when the user wants to execute an enabled supported operation on an existing cloud resource.
 - Treat "我的" and "所有" the same for now because the provided UI URLs do not expose a separate owner-only filter; rely on SmartCMP access control and the current user's visible scope.
 
 ## Comprehensive Resource Analysis
@@ -477,7 +495,8 @@ When operation intent is present, a resource lookup is only a target-resolution 
 2. Resolve the operation.
    - Use `start`, `stop`, `开机`, and `关机` aliases directly.
    - Use exact operation IDs such as `restart`, `refresh`, or `create_snapshot` directly.
-   - If the user gives a natural-language operation name, such as `take a snapshot`, first call `smartcmp_list_resource_operations` for the resolved resource and match only against the current user's executable no-parameter operations. If there is no unambiguous match, show the executable operation IDs and ask which one to run.
+   - If the user gives a natural-language operation name, such as `take a snapshot`, first call `smartcmp_list_resource_operations` for the resolved resource and match only against the current user's executable supported operations. If there is no unambiguous match, show the executable operation IDs and ask which one to run.
+   - `create_snapshot` is the only supported parameterized operation. Before confirmation, collect a non-empty snapshot name; snapshot description and memory inclusion are optional. Other operations with non-empty `parameters` remain outside this skill's execution scope.
 3. Confirm before submission.
    - Once both the resource UUID and operation ID are known, ask one concise confirmation using the resource name and operation ID/name, for example `Confirm stop on vm-a?`
    - Stop after asking for confirmation. Do not submit until the user explicitly confirms.
@@ -494,7 +513,7 @@ When operation intent is present, a resource lookup is only a target-resolution 
 - Keep list-mode output as a standard Markdown table. Include a `#` column for stable item references, a resource name column, and status; do not print object links in visible table cells.
 - For host detail, present only grouped key facts. Do not dump raw properties, top-level keys, source endpoints, or every key/value returned by the API.
 - `smartcmp_list_resource_operations` must only use `GET /nodes/{category}/{id}/resource-actions` with the current user context. Do not use `/resource-types/.../support-actions`, `/resource-types/.../resource-actions`, `/nodes/build-in-actions`, or other definition-level endpoints as executable-operation fallback.
-- Only show enabled no-parameter operations as executable choices. Operations that are disabled, web-only, have `inputsForm`, or require non-empty `parameters` are outside this tool's execution scope.
+- Only show enabled supported operations as executable choices. Operations that are disabled, web-only, have `inputsForm`, or require non-empty `parameters` are outside this tool's execution scope, except `create_snapshot`, whose dedicated snapshot fields are supported.
 - **NEVER claim a resource operation was submitted or succeeded without actually calling `smartcmp_operate_resource`.** You must call the tool and receive a real response before telling the user the operation is done.
 - **Before calling the operation tool, confirm with the user:** show the target resource name + operation ID/name, ask `Confirm this operation?`, and STOP. Only call the tool after user confirms.
 - After a resource operation succeeds, respond with only the action, resource ID(s), submitted status, message, and verification hint. Do not print raw request payloads or raw response details.
@@ -538,5 +557,5 @@ Never show:
 |--------|-------------|
 | `scripts/list_all_resource.py` | Call the standalone resource list endpoint and emit a Markdown resource table with visible status |
 | `scripts/resource_detail.py` | Fetch one cloud host view and emit a compact grouped detail summary |
-| `scripts/list_resource_operations.py` | List enabled no-parameter operations executable by the current SmartCMP user for one resource |
-| `scripts/operate_resource.py` | Submit SmartCMP no-parameter resource operations for one or more resource IDs |
+| `scripts/list_resource_operations.py` | List enabled supported operations executable by the current SmartCMP user for one resource |
+| `scripts/operate_resource.py` | Submit SmartCMP supported resource operations for one or more resource IDs |
